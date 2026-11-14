@@ -5,7 +5,7 @@ name: ArxOS community build
 # tag; a person must approve anything flagged), scan (dependencies installed with install scripts
 # disabled, no new package with an install hook, npm audit on runtime dependencies), build (our
 # patches applied, no secrets, smoke start) and release (binary, SHA256SUMS, build provenance), then
-# ARXOS/install.sh is pinned to the new hash. Every action is pinned to a commit.
+# install.sh is pinned to the new hash. Every action is pinned to a commit.
 
 on:
   schedule:
@@ -199,7 +199,7 @@ jobs:
           gh release create "$rel" "$name" SHA256SUMS --title "Plexo $TAG (ArxOS community build)" --notes "$notes"
           git config user.name "arxos-community[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          sed -i -E "s|^VERSION=\".*\"|VERSION=\"$ver\"|; s|^SHA256=\".*\"|SHA256=\"$sha\"|; s|^URL=\".*\"|URL=\"$url\"|" ARXOS/install.sh
+          sed -i -E "s|^VERSION=\".*\"|VERSION=\"$ver\"|; s|^SHA256=\".*\"|SHA256=\"$sha\"|; s|^URL=\".*\"|URL=\"$url\"|" install.sh
           echo "$TAG" > ARXOS/built.txt
           echo "$TAG" > ARXOS/audited.txt
           git clone -q --depth 1 --branch "$TAG" "https://github.com/$UPSTREAM.git" /tmp/up
@@ -208,6 +208,6 @@ jobs:
           if ! cmp -s /tmp/up/package.json ARXOS/upstream/package.json; then
             cp /tmp/up/package.json /tmp/up/package-lock.json ARXOS/upstream/
           fi
-          git add ARXOS/install.sh ARXOS/built.txt ARXOS/audited.txt ARXOS/upstream/package.json ARXOS/upstream/package-lock.json
+          git add install.sh ARXOS/built.txt ARXOS/audited.txt ARXOS/upstream/package.json ARXOS/upstream/package-lock.json
           git commit -q -m "release $TAG: pin install.sh to $sha"
           git push -q origin HEAD:${{ github.ref_name }}
