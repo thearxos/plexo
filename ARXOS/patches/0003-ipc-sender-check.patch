@@ -1,0 +1,26 @@
+diff --git a/src/main/ipc/handlers.ts b/src/main/ipc/handlers.ts
+index 5ed3eb7..02abb3a 100644
+--- a/src/main/ipc/handlers.ts
++++ b/src/main/ipc/handlers.ts
+@@ -52,10 +52,17 @@ function handle<K extends keyof IpcContract>(
+     ...args: IpcContract[K]['args']
+   ) => IpcContract[K]['result'] | Promise<IpcContract[K]['result']>
+ ): void {
+-  ipcMain.handle(
+-    IpcChannels[channel],
+-    listener as (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown
+-  )
++  ipcMain.handle(IpcChannels[channel], (event: IpcMainInvokeEvent, ...args: unknown[]) => {
++    // ArxOS: answer only the app's own page, never another frame or a navigated page
++    if (!fromAppPage(event)) throw new Error('refused: request not from the Plexo window')
++    return (listener as (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown)(event, ...args)
++  })
++}
++
++function fromAppPage(event: IpcMainInvokeEvent): boolean {
++  const url = event.senderFrame?.url ?? ''
++  const dev = process.env['ELECTRON_RENDERER_URL']
++  return url.startsWith('file://') || (!!dev && url.startsWith(dev))
+ }
+ 
+ const DESTINATION_CHECK_MS = 300

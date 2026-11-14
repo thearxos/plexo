@@ -1,0 +1,61 @@
+diff --git a/electron-builder.yml b/electron-builder.yml
+index 95f3cde..c0fdc7f 100644
+--- a/electron-builder.yml
++++ b/electron-builder.yml
+@@ -89,7 +89,5 @@ appImage:
+ npmRebuild: false
+ # Where the app looks for updates. Builds never publish themselves (--publish never): the release
+ # workflow uploads them, with the latest*.yml files the updater reads.
+-publish:
+-  provider: github
+-  owner: anmolkapil
+-  repo: plexo
++# ArxOS community build: no update feed in the app; updates arrive through arx.
++publish: null
+diff --git a/src/main/updater.ts b/src/main/updater.ts
+index 7cc0322..0c160a5 100644
+--- a/src/main/updater.ts
++++ b/src/main/updater.ts
+@@ -11,6 +11,12 @@ import { IpcChannels } from '../shared/ipc-channels'
+ import type { UpdateState } from '../shared/types'
+ import { saveSettings } from './settings'
+ 
++/** ArxOS community build: updates arrive through arx (audited and rebuilt from source), never by
++ * the app updating itself. */
++const SELF_UPDATE = false as boolean
++const ARXOS_UPDATE_NOTE =
++  'This is the ArxOS community build of Plexo. Update it with arx (arx update, or the ArxOS Control Center).'
++
+ const CHECK_EVERY_MS = 4 * 60 * 60_000
+ /** Where an update the app couldn't install itself is downloaded from instead. */
+ const DOWNLOAD_PAGE = 'https://getplexo.app/'
+@@ -39,6 +45,10 @@ function answer(message: string, detail?: string): void {
+ }
+ 
+ function check(fromMenu = false): void {
++  if (!SELF_UPDATE) {
++    if (fromMenu) void dialog.showMessageBox({ message: 'Updates come through ArxOS', detail: ARXOS_UPDATE_NOTE })
++    return
++  }
+   const { status } = state
+   // A failed install isn't retried on a timer: on an unsigned Mac it would fail again, after
+   // downloading the whole update again.
+@@ -50,6 +60,7 @@ function check(fromMenu = false): void {
+ }
+ 
+ function download(): void {
++  if (!SELF_UPDATE) return
+   set({ status: 'downloading', percent: 0 })
+   autoUpdater.downloadUpdate().catch(() => {})
+ }
+@@ -139,6 +150,10 @@ function setAppMenu(): void {
+  * there isn't one. */
+ export function startUpdater(window: () => BrowserWindow | null, autoUpdate: boolean): void {
+   getWindow = window
++  if (!SELF_UPDATE) {
++    state = { ...state, autoUpdate: false }
++    return
++  }
+   state = { ...state, autoUpdate }
+   autoUpdater.autoDownload = autoUpdate
+   // On by default for an rc build, and then it only ever looks for newer rc tags: 1.0.0 would

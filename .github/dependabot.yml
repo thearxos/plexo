@@ -1,0 +1,15 @@
+# Dependabot proposes and alerts; it is never the gate. Its pull requests go through the same
+# review, scan and build as every upstream release, and nothing merges itself.
+version: 2
+updates:
+  # the exact dependency set the build installs (a snapshot of upstream's lockfile at the built tag)
+  - package-ecosystem: npm
+    directory: /ARXOS/upstream
+    schedule: { interval: daily }
+    open-pull-requests-limit: 10
+    labels: [dependencies, security-review]
+  # the pinned actions of the build workflow
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    labels: [dependencies, workflow]

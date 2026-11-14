@@ -1,0 +1,213 @@
+name: ArxOS community build
+
+# Upstream: anmolkapil/plexo. This branch holds only the ArxOS layer (ARXOS/ and this workflow).
+# Every upstream release goes through: review (what changed on the risky surfaces since the audited
+# tag; a person must approve anything flagged), scan (dependencies installed with install scripts
+# disabled, no new package with an install hook, npm audit on runtime dependencies), build (our
+# patches applied, no secrets, smoke start) and release (binary, SHA256SUMS, build provenance), then
+# ARXOS/install.sh is pinned to the new hash. Every action is pinned to a commit.
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Upstream release tag to build (empty: the newest release)"
+        type: string
+        default: ""
+      approve:
+        description: "Build although the review flagged changes (only after a person read the report)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arxos-community
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: anmolkapil/plexo
+
+jobs:
+  watch:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.t.outputs.tag }}
+      build: ${{ steps.t.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - id: t
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WANT: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${WANT:-$(gh api "repos/$UPSTREAM/releases/latest" --jq .tag_name)}"
+          [[ "$tag" =~ ^v[0-9][0-9A-Za-z.+-]*$ ]] || { echo "unexpected upstream tag: $tag"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ -z "$WANT" ] && [ "$tag" = "$(cat ARXOS/built.txt 2>/dev/null || true)" ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"; echo "$tag is already built"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"; echo "building $tag"
+          fi
+
+  review:
+    needs: watch
+    if: needs.watch.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      verdict: ${{ steps.r.outputs.verdict }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Upstream history (no code runs)
+        run: git clone -q --filter=blob:none "https://github.com/$UPSTREAM.git" up && git -C up fetch -q --tags
+      - id: r
+        name: What changed on the risky surfaces since the audited tag
+        env:
+          TAG: ${{ needs.watch.outputs.tag }}
+        run: |
+          set -o pipefail
+          bash ARXOS/review.sh up "$(cat ARXOS/audited.txt)" "$TAG" | tee review.txt
+          echo "verdict=$(tail -1 review.txt)" >> "$GITHUB_OUTPUT"
+      - name: Stop for a person when something risky changed
+        if: steps.r.outputs.verdict != 'CLEAN' && inputs.approve != true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.watch.outputs.tag }}
+        run: |
+          { echo "Upstream released $TAG. The review flagged changes on surfaces that decide whether Plexo can hurt the person running it."
+            echo; echo '```'; cat review.txt; echo '```'; echo
+            echo "Read the diff (git diff $(cat ARXOS/audited.txt) $TAG upstream). If it is sound, run this workflow with tag=$TAG and approve=true."
+          } > issue.md
+          gh issue create --title "Review needed: upstream $TAG" --body-file issue.md --label security-review 2>/dev/null \
+            || gh issue create --title "Review needed: upstream $TAG" --body-file issue.md
+          echo "stopped for review"; exit 1
+
+  scan:
+    needs: [watch, review]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 22
+      - name: Upstream source at the tag
+        env:
+          TAG: ${{ needs.watch.outputs.tag }}
+        run: git -c core.hooksPath=/dev/null clone -q --depth 1 --branch "$TAG" "https://github.com/$UPSTREAM.git" src
+      - name: Use the dependency snapshot Dependabot keeps, when it matches the tag
+        run: |
+          if cmp -s src/package.json ARXOS/upstream/package.json; then
+            cp ARXOS/upstream/package-lock.json src/package-lock.json; echo "snapshot lockfile in use"
+          else
+            echo "the tag's package.json differs from the snapshot: building with upstream's lockfile"
+          fi
+      - name: Install with every install script disabled
+        working-directory: src
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: No new package runs an install script
+        run: |
+          python3 - <<'PY'
+          import json, pathlib
+          lock = json.load(open("src/package-lock.json"))
+          allow = set(pathlib.Path("ARXOS/install-scripts.allow").read_text().split())
+          hooks = {k.split("node_modules/")[-1] for k, v in lock.get("packages", {}).items() if k and v.get("hasInstallScript")}
+          new = sorted(hooks - allow)
+          print(f"{len(hooks)} packages with install scripts, all known" if not new else f"NEW install scripts: {new}")
+          raise SystemExit(1 if new else 0)
+          PY
+      - name: No high or critical advisory in what ships
+        working-directory: src
+        run: npm audit --omit=dev --audit-level=high
+
+  build:
+    needs: [watch, scan]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 22
+      - name: Upstream source at the tag, with the ArxOS patches
+        env:
+          TAG: ${{ needs.watch.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git -c core.hooksPath=/dev/null clone -q --depth 1 --branch "$TAG" "https://github.com/$UPSTREAM.git" src
+          cmp -s src/package.json ARXOS/upstream/package.json && cp ARXOS/upstream/package-lock.json src/package-lock.json || true
+          for p in ARXOS/patches/*.patch; do git -C src apply --verbose "../$p"; done
+      - name: Build
+        working-directory: src
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npx electron-vite build
+          npx electron-builder --linux dir --x64 --publish never
+      - name: Package, hash and smoke start
+        env:
+          TAG: ${{ needs.watch.outputs.tag }}
+        run: |
+          set -euo pipefail
+          ver="${TAG#v}"; name="plexo-$ver-arxos-x86_64.tar.zst"
+          dir=$(ls -d src/dist/linux-unpacked)
+          sudo apt-get install -y -qq xvfb >/dev/null
+          (cd "$dir" && timeout 25 xvfb-run -a ./plexo --no-sandbox --disable-gpu >/tmp/smoke.log 2>&1; echo "smoke exit $?" >> /tmp/smoke.log) || true
+          tail -5 /tmp/smoke.log
+          grep -q "smoke exit 124" /tmp/smoke.log || { echo "the app did not stay up for 25 s"; exit 1; }
+          tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -C "$dir" -cf - . | zstd -q -19 -o "$name"
+          sha256sum "$name" > SHA256SUMS; cat SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: plexo
+          path: |
+            plexo-*-arxos-x86_64.tar.zst
+            SHA256SUMS
+          retention-days: 7
+
+  release:
+    needs: [watch, review, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: plexo
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-path: plexo-*-arxos-x86_64.tar.zst
+      - name: Release, then pin install.sh to it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.watch.outputs.tag }}
+          VERDICT: ${{ needs.review.outputs.verdict }}
+        run: |
+          set -euo pipefail
+          ver="${TAG#v}"; name="plexo-$ver-arxos-x86_64.tar.zst"; rel="arxos-$TAG"
+          sha=$(awk '{print $1}' SHA256SUMS)
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$rel/$name"
+          notes="ArxOS community build of Plexo $TAG (upstream: https://github.com/$UPSTREAM). Review: $VERDICT. Built from the upstream tag with the patches in ARXOS/patches; build provenance attested. Install through arx."
+          gh release create "$rel" "$name" SHA256SUMS --title "Plexo $TAG (ArxOS community build)" --notes "$notes"
+          git config user.name "arxos-community[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          sed -i -E "s|^VERSION=\".*\"|VERSION=\"$ver\"|; s|^SHA256=\".*\"|SHA256=\"$sha\"|; s|^URL=\".*\"|URL=\"$url\"|" ARXOS/install.sh
+          echo "$TAG" > ARXOS/built.txt
+          echo "$TAG" > ARXOS/audited.txt
+          git clone -q --depth 1 --branch "$TAG" "https://github.com/$UPSTREAM.git" /tmp/up
+          # the snapshot follows the built tag: replaced when upstream's dependencies changed, kept
+          # (with any Dependabot fixes in its lockfile) when they did not
+          if ! cmp -s /tmp/up/package.json ARXOS/upstream/package.json; then
+            cp /tmp/up/package.json /tmp/up/package-lock.json ARXOS/upstream/
+          fi
+          git add ARXOS/install.sh ARXOS/built.txt ARXOS/audited.txt ARXOS/upstream/package.json ARXOS/upstream/package-lock.json
+          git commit -q -m "release $TAG: pin install.sh to $sha"
+          git push -q origin HEAD:${{ github.ref_name }}

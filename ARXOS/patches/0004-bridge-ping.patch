@@ -1,0 +1,15 @@
+diff --git a/src/main/browserBridge.ts b/src/main/browserBridge.ts
+index 8e62847..f578e60 100644
+--- a/src/main/browserBridge.ts
++++ b/src/main/browserBridge.ts
+@@ -103,7 +103,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, port: number):
+     return end(res, 415, cors)
+   }
+   if (req.method === 'GET' && path === '/ping') {
+-    noteExtension()
++    // ArxOS: only the extension (an extension Origin) marks the browser bridge as used; an
++    // Origin-less ping (an <img> on any page) must not change a setting
++    if (origin) noteExtension()
+     return json(res, 200, cors, {
+       app: 'plexo',
+       version: app.getVersion(),
