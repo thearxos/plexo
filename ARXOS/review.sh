@@ -37,4 +37,9 @@ if ! git -C "$repo" diff --quiet "$old" "$new" -- package.json; then
   [ -n "$deps" ] && { flag "package.json changed:"; printf '%s\n' "$deps" | head -20 | sed 's/^/          /'; }
 fi
 git -C "$repo" diff --quiet "$old" "$new" -- patches || flag "upstream's patches to its dependencies changed: $(git -C "$repo" diff --name-only "$old" "$new" -- patches | tr '\n' ' ')"
+# a package under an accepted advisory changed: the exception must be read again
+for pkg in $(grep -v '^#' "$here/audit-exceptions.txt" | awk 'NF {print $2}') webtorrent torrent-discovery bittorrent-tracker; do
+  git -C "$repo" diff -U0 "$old" "$new" -- package-lock.json | grep -qE "\"node_modules/([^\"]*/)?$pkg\"" \
+    && flag "a package in an accepted advisory's chain changed: $pkg (reread ARXOS/audit-exceptions.txt)"
+done
 [ "$risky" = 0 ] && echo CLEAN || echo REVIEW

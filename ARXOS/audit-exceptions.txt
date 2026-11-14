@@ -1,0 +1,5 @@
+# Advisories accepted after a person traced them, one per line:
+# <advisory id> <package> <reviewed on> <why it cannot reach Plexo>
+# The gate (audit-gate.py) still fails on every other high or critical advisory, and review.sh
+# stops the build when a package in an excepted chain changes, so each exception is reread.
+GHSA-2p57-rm9w-gvfp ip 2026-11-14 isPublic() is called only by bittorrent-tracker's tracker SERVER (lib/server/parse-udp.js, 11.2.3). Plexo runs the tracker Client only (webtorrent -> torrent-discovery imports { Client }; nothing creates a Server), so the flawed code is loaded but never called. No fixed version of ip exists.

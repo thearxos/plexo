@@ -122,9 +122,9 @@ jobs:
           print(f"{len(hooks)} packages with install scripts, all known" if not new else f"NEW install scripts: {new}")
           raise SystemExit(1 if new else 0)
           PY
-      - name: No high or critical advisory in what ships
+      - name: No high or critical advisory in what ships (except ones a person traced and listed)
         working-directory: src
-        run: npm audit --omit=dev --audit-level=high
+        run: python3 ../ARXOS/audit-gate.py
 
   build:
     needs: [watch, scan]
