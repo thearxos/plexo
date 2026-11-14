@@ -4,9 +4,9 @@
 # and a checksum mismatch is refused. As root it installs for everyone (/opt/plexo); as a user,
 # for that user (~/.local). Run by `arx pub install plexo`.
 set -euo pipefail
-VERSION="__VERSION__"
-SHA256="__SHA256__"
-URL="__URL__"
+VERSION="1.0.0-rc.15"
+SHA256="f0d703a42e29ea0f1f4e03d2d58f8feb3698c89a3cab0199f3564de48340b7a5"
+URL="https://github.com/thearxos/plexo/releases/download/arxos-v1.0.0-rc.15/plexo-1.0.0-rc.15-arxos-x86_64.tar.zst"
 [ "$VERSION" != "__VERSION__" ] || { echo "plexo: no audited build has been published yet" >&2; exit 1; }
 if [ "$(id -u)" -eq 0 ]; then
   PREFIX=/opt/plexo; BIN=/usr/local/bin; APPS=/usr/share/applications
