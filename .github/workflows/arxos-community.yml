@@ -196,6 +196,10 @@ jobs:
           sha=$(awk '{print $1}' SHA256SUMS)
           url="https://github.com/$GITHUB_REPOSITORY/releases/download/$rel/$name"
           notes="ArxOS community build of Plexo $TAG (upstream: https://github.com/$UPSTREAM). Review: $VERDICT. Built from the upstream tag with the patches in ARXOS/patches; build provenance attested. Install through arx."
+          if gh release view "$rel" >/dev/null 2>&1; then
+            # a re-run for a released tag keeps that release and its pin: a rebuild can differ in bytes
+            echo "release $rel exists: keeping it and the pin in install.sh"; exit 0
+          fi
           gh release create "$rel" "$name" SHA256SUMS --title "Plexo $TAG (ArxOS community build)" --notes "$notes"
           git config user.name "arxos-community[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -211,3 +215,25 @@ jobs:
           git add install.sh ARXOS/built.txt ARXOS/audited.txt ARXOS/upstream/package.json ARXOS/upstream/package-lock.json
           git commit -q -m "release $TAG: pin install.sh to $sha"
           git push -q origin HEAD:${{ github.ref_name }}
+      - name: Point the arx community registry at this release
+        env:
+          KEY: ${{ secrets.ARX_PUB_DB_DEPLOY_KEY }}
+          TAG: ${{ needs.watch.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch -q origin "${{ github.ref_name }}" && sha=$(git rev-parse FETCH_HEAD)
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/pubdb && chmod 600 ~/.ssh/pubdb
+          # GitHub's published host key, not trust on first use
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/pubdb -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+          git clone -q git@github.com:thearxos/arx-pub-db.git /tmp/pubdb
+          cd /tmp/pubdb
+          sed -i -E "s#^(plexo\|https://github.com/thearxos/plexo\|.*\|commit=)[0-9a-f]{40}\$#\1$sha#" community.db
+          grep -q "^plexo|.*|commit=$sha\$" community.db || { echo "no plexo entry to update"; exit 1; }
+          if git diff --quiet; then echo "registry already points at $sha"; else
+            git -c user.name="arxos-community[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -am "registry: plexo -> $sha (upstream $TAG)"
+            git push -q origin HEAD:main && echo "registry: plexo -> $sha"
+          fi
+          rm -f ~/.ssh/pubdb
