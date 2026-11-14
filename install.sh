@@ -14,7 +14,15 @@ else
   PREFIX="$HOME/.local/opt/plexo"; BIN="$HOME/.local/bin"; APPS="$HOME/.local/share/applications"
 fi
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "$tmp/plexo.tar.zst" "$URL"
+# Download with resume: a connection reset mid-transfer is common on slow or busy links and curl's
+# --retry does not resume one, so retry and continue from where it stopped. A partial or altered
+# file still fails the hash check below.
+ok=0
+for attempt in 1 2 3 4 5 6; do
+  if curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors -C - -o "$tmp/plexo.tar.zst" "$URL"; then ok=1; break; fi
+  echo "plexo: download interrupted (attempt $attempt), resuming" >&2; sleep $((attempt * 3))
+done
+[ "$ok" = 1 ] || { echo "plexo: download failed after 6 attempts" >&2; exit 1; }
 echo "$SHA256  $tmp/plexo.tar.zst" | sha256sum -c - >/dev/null 2>&1 || { echo "plexo: checksum mismatch, refusing to install" >&2; exit 1; }
 mkdir -p "$BIN" "$APPS"
 rm -rf "$PREFIX.new"; mkdir -p "$PREFIX.new"
